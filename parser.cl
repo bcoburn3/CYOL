@@ -26,6 +26,9 @@
       (let ((res (elt (state-tokens s) (state-pos s))))
 	res)))
 
+(defun skip (s)
+  (incf (state-pos s)))
+
 (defun peek (s n)
   ;returns the token n characters ahead of pos, does not advance pos
   (let ((idx (+ (state-pos s) n)))
@@ -61,18 +64,36 @@
 (defun is-next-identifier (s)
   (is-identifier (peek s 0)))
 
+(defun append-token (s token)
+  ;appends a token to the current expression
+  (setf (state-exp s) (append (state-exp s) (list token))))
+
+(defun push-cur-exp (s)
+  (push (state-exp s) (state-exp-stack s))
+  (setf (state-exp s) '()))
+
+(defun pop-exp-stack (s)
+  (setf (state-exp s) (append (pop (state-exp-stack s)) (list (state-exp s)))))
+
+;notes:
+;this works by building up each expression in reverse order, then calling reverse as they're
+;pushed to the next step.
+;all the (print "some error") calls will eventually be replaced by better reporting
+
 (defun expression-start (s)
   ;this one assumes that it's at the very start of an expression
-  ;figure out which sort of expression we're in
-  (setf (state-exp s) '())
+  ;push the current expression onto the indentation stack, then
+  ;clear the current expression, and get the next token
+  ;(push (state-exp s) (state-exp-stack s))
   (let ((token (next s)))
-    (push token (state-exp s))
+    (setf (state-exp s) token)
+    ;figure out which sort of expression we're in
     (cond ((is-next-literal s)
 	   (cond ((is-next-operator s) #'operator-state)
 		 ((is-next-dot s) #'call-state)
 		 (t #'expression-mid)))
 	  ((is-next-identifier s)
-	   (cond ((is-next-l-paren s) #'arglist-state)
+	   (cond ((is-next-l-paren s) #'self-call-state)
 		 ((is-next-equal s) #'set-local-state)
 		 (t #'expression-mid)))
 	  ((is-next-constant s)
@@ -88,9 +109,11 @@
 	       (progn (print "class-error") nil)))
 	  ((is-next-if s)
 	   #'if-state)
+	  ((is-next-delimiter s)
+	   #'delim-state)
 	  ((is-next-l-paren s)
 	   (progn
-	     (incf (state-pos s))
+	     (skip s)
 	     #'expression-start)))))
 
 (defun operator-state (s)
@@ -100,82 +123,102 @@
   ;will produce a parse tree like this:
   ;(+ 2 (* 3 5))
   ;and be cleaned up later
-  (push (next s) (state-exp s)
-	   
+  (push (next s) (state-exp s))
+  #'expression-start)
 
+(defun call-state (s)
+  ;state for expression.method type calls.  skip the dot, push the identifier after
+  ;onto the current expression.
+  (skip s)
+  (if (is-next-identifier s)
+      (push (next s) (state-exp s))
+      (print "call error, expected identifier"))
+  #'arglist-start-state)
 
+(defun self-call-state (s)
+  ;state for method(args) type calls.  add a 'nil-reciever token to the start of the 
+  ;current expression, then continue to arglist
+  (append-token s 'nil-reciever)
+  #'arglist-start-state)
+  
+(defun arglist-start-state (s)
+  ;state for argument lists
+  ;start by inserting a 'call' token at the start of the current expression
+  (append-token s 'call)
+  ;skip the open paren, then check for closing parens
+  (if (is-next-l-paren s)
+      (progn (skip s)
+	     (if (is-next-r-paren s)
+		 (progn
+		   (push 'nil-arguments (state-exp s))
+		   (pop-exp-stack s)
+		   #'expression-start)
+		 #'expression-start))
+      (print "arglist error, expected open paren")))
 
+(defun set-local-state (s)
+  ;insert a set token, then push just jump to a new expression
+  (append-token s 'set-local)
+  #'expression-start)
 
+(defun set-constant-state (s)
+  ;as above
+  (append-token s 'set-constant)
+  #'expression-start)
 
-(defun is-literal (token)
-  (find (car token) (list 'number 'string 'true 'false 'nil)))
+(defun def-state (s)
+  ;push the identifier onto the current expression, then check for paramlists
+  (push (next s) (state-exp s))
+  (if (is-next-l-paren s)
+      (progn
+	(skip s)
+	(push-cur-exp s)
+	(push 'param-list (state-exp s))
+	#'param-list-state)
+     #'block-start))
 
+(defun class-state (s)
+  (push (next s) (state-exp s))
+  #'block-start)
 
-(defstruct lexer
-  start
-  pos
-  code
-  tokens
-  len)
+(defun param-list-state (s)
+  ;in the beginning or somewhere in the middle of a param list
+  ;check for the closing paren, then push the identifier
+  (if (is-next-comma s)
+      (skip s))
+  (if (is-next-r-paren s)
+      (progn 
+	(pop-exp-stack s)
+	#'block-start)
+      (progn (push (next s) (state-exp s))
+	     #'param-list-state)))
 
-(defun next (l)
-  ;returns the next input character
-  (incf (lexer-pos l))
-  (if (>= (lexer-pos l) (lexer-len l))
-      'eof
-      (let ((res (elt (lexer-code l) (lexer-pos l))))
-	res)))
+(defun block-start (s)
+  (if (is-next-indent s)
+      (progn (skip s)
+	     (push-cur-exp s)
+	     (push 'block (state-exp s))
+	     #'expression-start)
+      (print "block error, expected indent")))
 
-(defun emit (l token)
-  (if (car token)
-      (push token (lexer-tokens l))))
+(defun if-state (s)
+  ;this just drops the potential error from not having a block after the
+  ;if on the floor
+  (append-token s 'if)
+  #'expression-start)
 
-(defun is-number (char)
-  ;returns t if char is the start of a number, nil otherwise
-  (if (find char "1234567890.")
-      t
-      nil))
+(defun delim-state (s)
+  ;state for having found a delimiter.  This includes commas, start/end of blocks,
+  ;newlines, etc.
+  (cond ((is-next-indent s) #'block-start)
+	((is-next-comma s)
+	 (progn (skip s)
+		(expression-start s)))
+	((is-next-r-paren s)
+	 (progn (pop-exp-stack s)
+		#'expression-start))
+	((is-next-dedent s)
+	 (progn (pop-exp-stack s)
+		#'expression-start))
 
-(defun next-state (char)
-  ;generic next state function, because the transitions after numbers, symbols, strings
-  ;and close parens are all the same
-  (cond ((equal char #\() #'lex-open-paren)
-	((equal char #\)) #'lex-close-paren)
-	((is-number char) #'lex-number)
-	((equal char #\") #'lex-string)
-	((or (equal char #\space) (equal char #\newline)) #'lex-whitespace)
-	(t #'lex-symbol)))
-
-(defun lex-open-paren (l)
-  ;lexer state for an open paren
-  ;emit an open paren token, transition to the next state
-  (emit l (list 'l-paren (elt (lexer-code l) (lexer-start l))))
-  (incf (lexer-start l))
-  (next-state (next l)))
-
-(defun lex-close-paren (l)
-  ;lexer state for a close paren
-  ;emit a close paren token, transition to the next state
-  (emit l (list 'r-paren (elt (lexer-code l) (lexer-start l))))
-  (incf (lexer-start l))
-  (next-state (next l)))
-
-(defmacro lex-state (name until-cond emit-symb)
-  `(defun ,name (l)
-     (loop for char = (next l)
-	until ,until-cond
-	until (equal char 'eof)
-	finally (if (equal char 'eof)
-		    (return nil)
-		    (progn
-		      (emit l (list ,emit-symb (subseq (lexer-code l) (lexer-start l) (lexer-pos l))))
-		      (setf (lexer-start l) (lexer-pos l))
-		      (return (next-state char)))))))
-
-(lex-state lex-whitespace (not (or (equal char #\space) (equal char #\newline))) nil)
-(lex-state lex-string (or (equal char #\() (equal char #\)) (equal char #\space)) 'string)
-(lex-state lex-number (not (is-number char)) 'number)
-(lex-state lex-symbol (or (equal char #\space) (equal char #\newline)) 'symbol)
-
-(eval-when (:execute)
-  (print (run-lexer "(+ 1 23.4 \"abcd\" (* 3 4))")))
+	     
