@@ -84,37 +84,39 @@
   ;this one assumes that it's at the very start of an expression
   ;push the current expression onto the indentation stack, then
   ;clear the current expression, and get the next token
-  ;(push (state-exp s) (state-exp-stack s))
-  (let ((token (next s)))
-    (setf (state-exp s) token)
+  ;(push-cur-exp s)
+  ;(let ((token (next s)))
+    ;(setf (state-exp s) token)
     ;figure out which sort of expression we're in
-    (cond ((is-next-literal s)
-	   (cond ((is-next-operator s) #'operator-state)
-		 ((is-next-dot s) #'call-state)
-		 (t #'expression-mid)))
-	  ((is-next-identifier s)
-	   (cond ((is-next-l-paren s) #'self-call-state)
-		 ((is-next-equal s) #'set-local-state)
-		 (t #'expression-mid)))
-	  ((is-next-constant s)
-	   (cond ((is-next-equal s) #'set-constant-state)
-		 (t #'expression-mid)))
-	  ((is-next-def s)
-	   (if (is-next-identifier s)
-	       #'def-state
-	       (progn (print "def error") nil)))
-	  ((is-next-class s)
-	   (if (is-next-constant s)
-	       #'class-state
-	       (progn (print "class-error") nil)))
-	  ((is-next-if s)
-	   #'if-state)
-	  ((is-next-delimiter s)
-	   #'delim-state)
-	  ((is-next-l-paren s)
-	   (progn
-	     (skip s)
-	     #'expression-start)))))
+  (cond ((is-next-literal s)
+	 (cond ((is-operator (peek s 2)) #'operator-state)
+	       ((is-dot (peek s 2)) #'call-state)
+	       ;some state here for literal followed by a delimiter
+	       ))
+	((is-next-identifier s)
+	 (cond ((is-l-paren (peek s 2)) #'self-call-state)
+	       ((is-equal (peek s 2)) #'set-local-state)))
+	       ;(t #'expression-mid)))
+	((is-next-constant s)
+	 (cond ((is-equal (peek s 2)) #'set-constant-state)))
+	       ;(t #'expression-mid)))
+	((is-next-def s)
+	 (if (is-identifier (peek s 2))
+	     #'def-state
+	     (progn (print "def error") nil)))
+	((is-next-class s)
+	 (if (is-constant (peek s))
+	     #'class-state
+	     (progn (print "class-error") nil)))
+	((is-next-if s)
+	 #'if-state)
+	((is-next-delimiter s)
+	 #'delim-state)
+	((is-next-l-paren s)
+	 (progn
+	   (push-cur-exp s)
+	   (skip s)
+	   #'expression-start))))
 
 (defun operator-state (s)
   ;state for operators.  Operator precedence will be handled at a later step
@@ -123,28 +125,31 @@
   ;will produce a parse tree like this:
   ;(+ 2 (* 3 5))
   ;and be cleaned up later
+  (push-cur-exp s)
+  ;add the e
   (push (next s) (state-exp s))
+  (append-token s (next s)) ;move the operator token to the start of the list
   #'expression-start)
 
 (defun call-state (s)
-  ;state for expression.method type calls.  skip the dot, push the identifier after
-  ;onto the current expression.
+  ;state for expression.method type calls.
+  (push-cur-exp s)
+  (push 'call (state-exp s))
+  (push (next s) (state-exp s))
   (skip s)
-  (if (is-next-identifier s)
-      (push (next s) (state-exp s))
-      (print "call error, expected identifier"))
+  (push (next s) (state-exp s))
   #'arglist-start-state)
 
 (defun self-call-state (s)
   ;state for method(args) type calls.  add a 'nil-reciever token to the start of the 
   ;current expression, then continue to arglist
-  (append-token s 'nil-reciever)
+  (push 'call (state-exp s))
+  (push 'nil-reciever (state-exp s))
+  (push (next s) (state-exp s))
   #'arglist-start-state)
   
 (defun arglist-start-state (s)
   ;state for argument lists
-  ;start by inserting a 'call' token at the start of the current expression
-  (append-token s 'call)
   ;skip the open paren, then check for closing parens
   (if (is-next-l-paren s)
       (progn (skip s)
@@ -158,16 +163,19 @@
 
 (defun set-local-state (s)
   ;insert a set token, then push just jump to a new expression
-  (append-token s 'set-local)
+  (push 'set-local (state-exp s))
+  (push (next s) (state-exp s))
   #'expression-start)
 
 (defun set-constant-state (s)
   ;as above
-  (append-token s 'set-constant)
+  (push 'set-constant (state-exp s))
+  (push (next s) (state-exp s))
   #'expression-start)
 
 (defun def-state (s)
-  ;push the identifier onto the current expression, then check for paramlists
+  (push-cur-exp s)
+  (push (next s) (state-exp s))
   (push (next s) (state-exp s))
   (if (is-next-l-paren s)
       (progn
@@ -178,6 +186,8 @@
      #'block-start))
 
 (defun class-state (s)
+  (push-cur-exp s)
+  (push (next s) (state-exp s))
   (push (next s) (state-exp s))
   #'block-start)
 
@@ -204,7 +214,8 @@
 (defun if-state (s)
   ;this just drops the potential error from not having a block after the
   ;if on the floor
-  (append-token s 'if)
+  (push-cur-exp s)
+  (push (next s) (state-exp s))
   #'expression-start)
 
 (defun delim-state (s)
