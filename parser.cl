@@ -2,6 +2,7 @@
 
 ;this takes a list of tokens from the lexer and returns an AST made from s-expressions
 
+(in-package :CYOL)
 
 (defstruct state
   start
@@ -13,10 +14,19 @@
   len)
 
 (defun run-parser (tokens)
-  (let ((s (make-state :start 0 :pos 0 :tokens tokens :exp '() :exp-stack '() :tree '() :len (length tokens))))
+  (let* ((n-tokens (append (list (list 'null 'token)) tokens))
+	 (s (make-state :start 0 :pos 0 :tokens n-tokens :exp '() :exp-stack '() :tree '() :len (length tokens))))
     (loop for state-fn = #'expression-start then (funcall state-fn s)
-	 while state-fn)
-    (reverse (state-tree s))))
+	 repeat 1000
+       while state-fn
+       do (print "next")
+	 (print (peek s 1))
+	 (print "parser state")
+	 (print (state-exp s))
+	 (print state-fn))
+    (print (state-exp-stack s))
+    (print (state-exp s))
+    (reverse (state-exp-stack s))))
 
 (defun next (s)
   ;returns the next token, advances pos by one
@@ -78,26 +88,38 @@
   ;(let ((token (next s)))
     ;(setf (state-exp s) token)
     ;figure out which sort of expression we're in
-  (cond ((is-next-literal s)
-	 (cond ((is-operator (peek s 2)) #'operator-state)
+  (cond ((equal (peek s 2) 'eof)
+	 'nil)
+	((is-next-literal s)
+	 (progn (print "literal")
+	 (cond ;((is-operator (peek s 2)) #'operator-state)
 	       ((is-dot (peek s 2)) #'call-state)
-	       ;some state here for literal followed by a delimiter
-	       ))
+	       (t (progn (push (next s) (state-exp s))
+			 #'expression-start))
+	       )))
 	((is-next-identifier s)
+	 (progn (print "identifier")
 	 (cond ((is-l-paren (peek s 2)) #'self-call-state)
-	       ((is-equal (peek s 2)) #'set-local-state)))
-	       ;(t #'expression-mid)))
+	       ((is-equal (peek s 2)) #'set-local-state)
+	       (t (progn (push (next s) (state-exp s))
+			 #'expression-start)))))
 	((is-next-constant s)
-	 (cond ((is-equal (peek s 2)) #'set-constant-state)))
-	       ;(t #'expression-mid)))
+	 (progn (print "constant")
+	 (cond ((is-equal (peek s 2)) #'set-constant-state)
+	       (t (progn (push (next s) (state-exp s))
+			 #'expression-start)))))
+	((is-next-operator s)
+	 #'operator-state)
 	((is-next-def s)
+	 (progn (print "def")
 	 (if (is-identifier (peek s 2))
 	     #'def-state
-	     (progn (print "def error") nil)))
+	     (progn (print "def error") nil))))
 	((is-next-class s)
+	 (progn (print "class")
 	 (if (is-constant (peek s 1))
 	     #'class-state
-	     (progn (print "class-error") nil)))
+	     (progn (print "class-error") nil))))
 	((is-next-if s)
 	 #'if-state)
 	((is-next-delimiter s)
@@ -106,7 +128,9 @@
 	 (progn
 	   (push-cur-exp s)
 	   (skip s)
-	   #'expression-start))))
+	   #'expression-start))
+	(t (progn (print "missing state")
+		  (print (peek s 1))))))
 
 (defun operator-state (s)
   ;state for operators.  Operator precedence will be handled at a later step
@@ -115,11 +139,11 @@
   ;will produce a parse tree like this:
   ;(+ 2 (* 3 5))
   ;and be cleaned up later
-  (push-cur-exp s)
-  ;add the e
-  (push (next s) (state-exp s))
-  (append-token s (next s)) ;move the operator token to the start of the list
-  #'expression-start)
+  (let ((prev-exp (pop (state-exp s))))
+    (push-cur-exp s)
+    (push (next s) (state-exp s))
+    (push prev-exp (state-exp s))
+    #'expression-start))
 
 (defun call-state (s)
   ;state for expression.method type calls.
@@ -214,25 +238,31 @@
   (cond ((is-next-indent s) #'block-start)
 	((is-next-comma s)
 	 (progn (skip s)
-		(expression-start s)))
+		#'expression-start))
 	((is-next-r-paren s)
 	 (progn (pop-exp-stack s)
+		(skip s)
 		#'expression-start))
 	((is-next-dedent s)
 	 (progn (let ((offset (cadr (next s))))
 		  (loop repeat offset
 		     do (pop-exp-stack s)))
+		(skip s)
 		#'expression-start))
 	((is-next-newline s)
 	 (progn (append-cur-exp s)
+		(skip s)
 		#'expression-start))))
 
 ;is-next-x type functions only below
 (defun is-next-number (s)
-  (is-number (peek s 0)))
+  (is-number (peek s 1)))
+
+(defun is-number (token)
+  (equal (car token) 'number))
 
 (defun is-next-literal (s)
-  (is-literal (peek s 0)))
+  (is-literal (peek s 1)))
 
 (defun is-literal (token)
   (or (equal (car token) 'string)
@@ -243,93 +273,93 @@
 	       (equal (cadr token) "nil")))))
 
 (defun is-next-operator (s)
-  (is-operator (peek s 0)))
+  (is-operator (peek s 1)))
 
 (defun is-operator (token)
   (equal (car token) 'operator))
 
 (defun is-next-dot (s)
-  (is-dot (peek s 0)))
+  (is-dot (peek s 1)))
 
 (defun is-dot (token)
   (and (equal (car token) 'value)
        (equal (cadr token) ".")))
 
 (defun is-next-identifier (s)
-  (is-identifier (peek s 0)))
+  (is-identifier (peek s 1)))
 
 (defun is-identifier (token)
   (equal (car token) 'identifier))
 
 (defun is-next-l-paren (s)
-  (is-l-paren (peek s 0)))
+  (is-l-paren (peek s 1)))
 
 (defun is-l-paren (token)
   (and (equal (car token) 'value)
-       (equal (cadr token) "(")))
+       (equal (cadr token) #\()))
 
 (defun is-next-r-paren (s)
-  (is-r-paren (peek s 0)))
+  (is-r-paren (peek s 1)))
 
 (defun is-r-paren (token)
   (and (equal (car token) 'value)
-       (equal (cadr token) ")")))
+       (equal (cadr token) #\))))
 
 (defun is-next-comma (s)
-  (is-comma (peek s 0)))
+  (is-comma (peek s 1)))
 
 (defun is-comma (token)
   (and (equal (car token) 'value)
-       (equal (cadr token) ",")))
+       (equal (cadr token) #\,)))
 
 (defun is-next-equal (s)
-  (is-equal (peek s 0)))
+  (is-equal (peek s 1)))
 
 (defun is-equal (token)
   (and (equal (car token) 'value)
-       (equal (cadr token) "=")))
+       (equal (cadr token) #\=)))
 
 (defun is-next-constant (s)
-  (is-constant (peek s 0)))
+  (is-constant (peek s 1)))
 
 (defun is-constant (token)
   (equal (car token) 'constant))
 
 (defun is-next-def (s)
-  (is-def (peek s 0)))
+  (is-def (peek s 1)))
 
 (defun is-def (token)
   (and (equal (car token) 'keyword)
        (equal (cadr token) "def")))
 
 (defun is-next-class (s)
-  (is-class (peek s 0)))
+  (is-class (peek s 1)))
 
 (defun is-class (token)
   (and (equal (car token) 'keyword)
        (equal (cadr token) "class")))
 
 (defun is-next-if (s)
-  (is-if (peek s 0)))
+  (is-if (peek s 1)))
  
 (defun is-if (token)
   (and (equal (car token) 'keyword)
        (equal (cadr token) "if")))
 
 (defun is-next-indent (s)
-  (is-indent (peek s 0)))
+  (is-indent (peek s 1)))
 
 (defun is-indent (token)
   (equal (car token) 'indent))
 
 (defun is-next-dedent (s)
-  (is-dedent (peek s 0)))
+  (is-dedent (peek s 1)))
 
 (defun is-dedent (token)
   (equal (car token) 'dedent))
 
 (defun is-next-newline (s)
-  (is-newline (peek s 0)))
+  (is-newline (peek s 1)))
 
 (defun is-newline (token)
   (or (equal (car token) 'newline)
@@ -337,7 +367,7 @@
 	   (equal (cadr token) ";"))))
 
 (defun is-next-delimiter (s)
-  (is-delimiter (peek s 0)))
+  (is-delimiter (peek s 1)))
 
 (defun is-delimiter (token)
   (or (is-comma token)

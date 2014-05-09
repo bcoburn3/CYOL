@@ -6,8 +6,7 @@
 
 ;so, I'm going to port it to Lisp instead, which will hopefully give a better understanding.
 
-(eval-when (:compile-toplevel :execute)
-  (ql:quickload :cl-ppcre))
+(in-package :CYOL)
 
 (defun file-to-string (file-name)
   (with-open-file (in file-name)
@@ -16,36 +15,21 @@
           while line
           do (princ line s)))))
 
-(cl-ppcre:scan-to-strings "\\A\\:\\r( +)" ":
-    ")
-
-(print (cl-ppcre:scan-to-strings '(:sequence :modeless-start-anchor #\: #\return (:register (:greedy-repetition 1 nil #\space))) 
-				 (with-output-to-string (stream)
-				   (dolist (char '(#\: #\return #\space))
-				     (princ char stream)))))
-
-(print (cl-ppcre:parse-string  "\\A\\:\\r( +)"))
-
-(loop for c across (file-to-string "c:\\ben\\code\\CYOL\\test.txt")
-     do (print c))
-
-(loop for c across ":
-    "
-     do (print c))
-
 (defun tokenize (code)
-  (let ((keywords '("def" "class" "if" "true" "false" "nil"))
+  (let ((keywords (list "def" "class" "if" "true" "false" "nil"))
 	(tokens '())
 	(current-indent 0)
 	(indent-stack '(0))
 	(chunk "temp"))
+    (print keywords)
     (loop with pos = 0
        with len = (length code)
        while (< pos len)
-       do (cond
+       do (print chunk)
+	 (cond
 	    ((setf chunk (cl-ppcre:scan-to-strings "\\A([a-z]\\w*)" code :start pos))
 	     (progn
-	       (if (find chunk keywords)
+	       (if (find chunk keywords :test #'equal)
 		   (push (list 'keyword chunk) tokens)
 		   (push (list 'identifier chunk) tokens))
 	       (incf pos (length chunk))))
