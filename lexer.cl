@@ -26,6 +26,7 @@
        with len = (length code)
        while (< pos len)
        do (print chunk)
+	 (print tokens)
 	 (cond
 	    ((setf chunk (cl-ppcre:scan-to-strings "\\A([a-z]\\w*)" code :start pos))
 	     (progn
@@ -58,11 +59,20 @@
 	       (if (= (- (length chunk) 1) current-indent) 
 		   (push (list 'newline "\\n") tokens) ;indentation level hasn't changed
 		   (progn
-		     (loop for indent-size = (- (length chunk) 1)
-			while (< indent-size current-indent)
-			do (pop indent-stack)
+		     (let ((prev-indent (pop indent-stack)))
+		       (if (car indent-stack)
+			   (setf current-indent (car indent-stack))
+			   (setf current-indent 0))
+		       (push (list 'dedent (- prev-indent (- (length chunk) 1))) tokens))
+		    #| (loop repeat 1
+			;while (< indent-size current-indent)
+			do (let ((prev-indent (pop indent-stack)))
 			  (setf current-indent (car indent-stack))
-			  (push (list 'dedent (- (length chunk) 1)) tokens))
+			  ;(print "dedent test")
+			  ;(print prev-indent)
+			  ;(print current-indent)
+			  ;(print (length chunk))
+			  (push (list 'dedent (- prev-indent (- (length chunk) 1))) tokens)))|#
 		     (push (list 'newline "\\n") tokens)))
 	       (incf pos (length chunk))))
 	    ((setf chunk (cl-ppcre:scan-to-strings "\\A(\\|\\||&&|==|!=|<=|>=)" code :start pos))
