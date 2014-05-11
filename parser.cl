@@ -23,6 +23,7 @@
 	 (print (peek s 1))
 	 (print "parser state")
 	 (print (state-exp s))
+	 (print (state-exp-stack s))
 	 (print state-fn))
     (print (state-exp-stack s))
     (print (state-exp s))
@@ -47,7 +48,6 @@
 	(let ((res (elt (state-tokens s) idx)))
 	  res))))
 
-
 (defun accept (s lst)
   (let ((token (next s)))
     (if (find (car token) lst)
@@ -65,15 +65,20 @@
   (setf (state-exp s) (append (state-exp s) (list token))))
 
 (defun push-cur-exp (s)
-  (push (state-exp s) (state-exp-stack s))
+  (if (state-exp s) ;don't push nil states
+      (push (list (state-exp s)) (state-exp-stack s)))
   (setf (state-exp s) '()))
 
 (defun append-cur-exp (s)
-  (setf (car (state-exp-stack s)) (append (car (state-exp-stack s)) (list (state-exp s))))
+  (if (state-exp-stack s)
+      (if (state-exp s) ;don't push nil states
+	  (setf (car (state-exp-stack s)) (append (list (state-exp s)) (car (state-exp-stack s)))))
+       ;if the expression stack is empty we can just set it to the current expression
+      (setf (state-exp-stack s) (list (state-exp s))))
   (setf (state-exp s) '()))
 
 (defun pop-exp-stack (s)
-  (setf (state-exp s) (append (pop (state-exp-stack s)) (list (state-exp s)))))
+  (setf (state-exp s) (append (list (state-exp s)) (pop (state-exp-stack s)))))
 
 ;notes:
 ;this works by building up each expression in reverse order, then calling reverse as they're
@@ -140,7 +145,7 @@
   ;(+ 2 (* 3 5))
   ;and be cleaned up later
   (let ((prev-exp (pop (state-exp s))))
-    (push-cur-exp s)
+    ;(push-cur-exp s)
     (push (next s) (state-exp s))
     (push prev-exp (state-exp s))
     #'expression-start))
@@ -157,6 +162,7 @@
 (defun self-call-state (s)
   ;state for method(args) type calls.  add a 'nil-reciever token to the start of the 
   ;current expression, then continue to arglist
+  (push-cur-exp s)
   (push 'call (state-exp s))
   (push 'nil-reciever (state-exp s))
   (push (next s) (state-exp s))
@@ -210,7 +216,7 @@
   ;check for the closing paren, then push the identifier
   (if (is-next-comma s)
       (skip s))
-  (if (is-next-r-paren s)
+1  (if (is-next-r-paren s)
       (progn 
 	(pop-exp-stack s)
 	#'block-start)
@@ -226,7 +232,7 @@
       (print "block error, expected indent")))
 
 (defun if-state (s)
-  ;this just drops the potential error from not having a block after the
+  ;this just drops the potential error from not having a block after they
   ;if on the floor
   (push-cur-exp s)
   (push (next s) (state-exp s))
@@ -244,7 +250,7 @@
 		(skip s)
 		#'expression-start))
 	((is-next-dedent s)
-	 (progn (let ((offset (cadr (next s))))
+	 (progn (let ((offset (ceiling (cadr (next s)) 1)))
 		  (loop repeat offset
 		     do (pop-exp-stack s)))
 		(skip s)
