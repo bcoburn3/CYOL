@@ -25,8 +25,8 @@
     (loop with pos = 0
        with len = (length code)
        while (< pos len)
-       do (print chunk)
-	 (print tokens)
+       do ;(print chunk)
+	 ;(print tokens)
 	 (cond
 	    ((setf chunk (cl-ppcre:scan-to-strings "\\A([a-z]\\w*)" code :start pos))
 	     (progn

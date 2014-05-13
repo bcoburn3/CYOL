@@ -8,10 +8,49 @@
   start
   pos 
   tokens
-  tree
   exp
   exp-stack
-  len)
+  len
+  ops)
+
+(defun add-delims (tokens)
+  ;returns a version of the token stream with delimitors for the AST added.
+  ;instead of parsing the tokens directly, we're going to just turn it into a 
+  ;lisp-like syntax using some (hopefully simple) rules
+  (let  ((s (make-state :start 0 :pos 0 :tokens tokens :exp '() :exp-stack '() :len (length tokens) :ops 0)))
+    (loop 
+       for token = (next s)
+       with res = '()
+       while (not (equal (peek s 1) 'eof))
+       do (cond ((is-newline token) 
+		 (if (not (is-next-newline s))
+		     (push 'open-delim res)))
+		((is-next-operator s)
+		 (setf res (append (operator-delims s) res)))
+		((is-next-newline s)
+		 (progn
+		   (push token res)         ;if the current character is a newline we'd match
+		   (push 'close-delim res))) ;the first condition
+		((is-dedent token)
+		 (loop repeat (cadr token)
+		    do (push 'close-delim res)))
+		(t (push token res)))
+	 finally (return res))))
+
+(defun operator-delims (s)
+  (loop for i = 0 then (+ i 1) ;starting at 2 to skip the first operator
+     with ops-count = -1
+     with res = '()
+     for token = (peek s i)
+     while (not (is-newline token))
+     do (if (is-operator token)
+	    (progn (incf ops-count)
+		   (push 'close-delim res)
+		   (push token res))
+	    (push token res))
+     finally (progn (incf (state-pos s) i)
+		    (return (append res (loop repeat ops-count collecting 'open-delim))))))
+
 
 (defun run-parser (tokens)
   (let* ((n-tokens (append (list (list 'null 'token)) tokens))
@@ -227,14 +266,14 @@
   (if (is-next-indent s)
       (progn (skip s)
 	     (push-cur-exp s)
-	     (push 'block (state-exp s))
+	     ;(push 'block (state-exp s))
 	     #'expression-start)
       (print "block error, expected indent")))
 
 (defun if-state (s)
-  ;this just drops the potential error from not having a block after they
+  ;this just drops the potential error from not having a block after the
   ;if on the floor
-  (push-cur-exp s)
+  (append-cur-exp s)
   (push (next s) (state-exp s))
   #'expression-start)
 
@@ -246,7 +285,7 @@
 	 (progn (skip s)
 		#'expression-start))
 	((is-next-r-paren s)
-	 (progn (pop-exp-stack s)
+	 (progn ;(pop-exp-stack s)
 		(skip s)
 		#'expression-start))
 	((is-next-dedent s)
