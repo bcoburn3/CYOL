@@ -215,3 +215,4 @@ pip-log.txt
 .mr.developer.cfg
 *.cl#
 *.wx64fsl
+*.txt

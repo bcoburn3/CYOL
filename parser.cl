@@ -17,39 +17,42 @@
   ;returns a version of the token stream with delimitors for the AST added.
   ;instead of parsing the tokens directly, we're going to just turn it into a 
   ;lisp-like syntax using some (hopefully simple) rules
-  (let  ((s (make-state :start 0 :pos 0 :tokens tokens :exp '() :exp-stack '() :len (length tokens) :ops 0)))
+  (let  ((s (make-state :start 0 :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens) :ops 0)))
     (loop 
        for token = (next s)
-       with res = '()
+       with res = (list 'open-delim)
        while (not (equal (peek s 1) 'eof))
-       do (cond ((is-newline token) 
-		 (if (not (is-next-newline s))
-		     (push 'open-delim res)))
-		((is-next-operator s)
-		 (setf res (append (operator-delims s) res)))
-		((is-next-newline s)
-		 (progn
-		   (push token res)         ;if the current character is a newline we'd match
-		   (push 'close-delim res))) ;the first condition
-		((is-dedent token)
-		 (loop repeat (cadr token)
-		    do (push 'close-delim res)))
-		(t (push token res)))
-	 finally (return res))))
+       do (print "next")
+	 (print token)
+	 (print res)
+	 (cond ((is-newline token)
+		(if (not (is-next-newline s))
+		    (push 'open-delim res)))
+	       ((is-next-operator s)
+		(setf res (append (operator-delims s) res)))
+	       ((or (is-next-newline s) (is-next-indent s))
+		(progn
+		  (push token res)         ;if the current character is a newline we'd match
+		  (push 'close-delim res))) ;the first condition
+	       ((is-dedent token)
+		(loop repeat (cadr token)
+		   do (push 'close-delim res)))
+	       (t (push token res)))
+       finally (return res))))
 
 (defun operator-delims (s)
   (loop for i = 0 then (+ i 1) ;starting at 2 to skip the first operator
      with ops-count = -1
      with res = '()
-     for token = (peek s i)
-     while (not (is-newline token))
-     do (if (is-operator token)
+     for token = (peek s 0) then (next s)
+     while (not (is-terminator token))
+     do (if (is-next-operator s)
 	    (progn (incf ops-count)
-		   (push 'close-delim res)
+		   (push 'open-delim res)
 		   (push token res))
 	    (push token res))
-     finally (progn (incf (state-pos s) i)
-		    (return (append res (loop repeat ops-count collecting 'open-delim))))))
+     finally (progn ;(incf (state-pos s) i)
+		    (return (append res (loop repeat ops-count collecting 'close-delim))))))
 
 
 (defun run-parser (tokens)
@@ -385,7 +388,7 @@
        (equal (cadr token) "class")))
 
 (defun is-next-if (s)
-  (is-if (peek s 1)))
+    (is-if (peek s 1)))
  
 (defun is-if (token)
   (and (equal (car token) 'keyword)
@@ -420,3 +423,13 @@
       (is-dedent token)
       (is-indent token)
       (is-newline token)))
+
+(defun is-next-terminator (s)
+  (is-terminator (peek s 1)))
+
+(defun is-terminator (token)
+  (or (is-newline token)
+      (is-indent token)
+      (is-dedent token)))
+
+
