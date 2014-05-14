@@ -13,63 +13,13 @@
   len
   ops)
 
-(defun add-delims (tokens)
-  ;returns a version of the token stream with delimitors for the AST added.
-  ;instead of parsing the tokens directly, we're going to just turn it into a 
-  ;lisp-like syntax using some (hopefully simple) rules
-  (let  ((s (make-state :start 0 :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens) :ops 0)))
-    (loop 
-       for token = (next s)
-       with res = (list 'open-delim)
-       while (not (equal (peek s 1) 'eof))
-       do (print "next")
-	 (print token)
-	 (print res)
-	 (cond ((is-newline token)
-		(if (not (is-next-newline s))
-		    (push 'open-delim res)))
-	       ((is-next-operator s)
-		(setf res (append (operator-delims s) res)))
-	       ((or (is-next-newline s) (is-next-indent s))
-		(progn
-		  (push token res)         ;if the current character is a newline we'd match
-		  (push 'close-delim res))) ;the first condition
-	       ((is-dedent token)
-		(loop repeat (cadr token)
-		   do (push 'close-delim res)))
-	       (t (push token res)))
-       finally (return res))))
-
-(defun operator-delims (s)
-  (loop for i = 0 then (+ i 1) ;starting at 2 to skip the first operator
-     with ops-count = -1
-     with res = '()
-     for token = (peek s 0) then (next s)
-     while (not (is-terminator token))
-     do (if (is-next-operator s)
-	    (progn (incf ops-count)
-		   (push 'open-delim res)
-		   (push token res))
-	    (push token res))
-     finally (progn ;(incf (state-pos s) i)
-		    (return (append res (loop repeat ops-count collecting 'close-delim))))))
-
-
 (defun run-parser (tokens)
-  (let* ((n-tokens (append (list (list 'null 'token)) tokens))
-	 (s (make-state :start 0 :pos 0 :tokens n-tokens :exp '() :exp-stack '() :tree '() :len (length tokens))))
-    (loop for state-fn = #'expression-start then (funcall state-fn s)
-	 repeat 1000
-       while state-fn
-       do (print "next")
-	 (print (peek s 1))
-	 (print "parser state")
-	 (print (state-exp s))
-	 (print (state-exp-stack s))
-	 (print state-fn))
-    (print (state-exp-stack s))
-    (print (state-exp s))
-    (reverse (state-exp-stack s))))
+  (let ((s (make-state :start 0 :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens))))
+    (loop while (< (state-pos s) (- (state-len s) 1))
+       for exp = (expression-start s)
+       while exp
+       repeat 1000
+       collecting exp)))
 
 (defun next (s)
   ;returns the next token, advances pos by one
@@ -122,185 +72,96 @@
 (defun pop-exp-stack (s)
   (setf (state-exp s) (append (list (state-exp s)) (pop (state-exp-stack s)))))
 
-;notes:
-;this works by building up each expression in reverse order, then calling reverse as they're
-;pushed to the next step.
-;all the (print "some error") calls will eventually be replaced by better reporting
-
 (defun expression-start (s)
-  ;this one assumes that it's at the very start of an expression
-  ;push the current expression onto the indentation stack, then
-  ;clear the current expression, and get the next token
-  ;(push-cur-exp s)
-  ;(let ((token (next s)))
-    ;(setf (state-exp s) token)
-    ;figure out which sort of expression we're in
-  (cond ((equal (peek s 2) 'eof)
-	 'nil)
-	((is-next-literal s)
-	 (progn (print "literal")
-	 (cond ;((is-operator (peek s 2)) #'operator-state)
-	       ((is-dot (peek s 2)) #'call-state)
-	       (t (progn (push (next s) (state-exp s))
-			 #'expression-start))
-	       )))
-	((is-next-identifier s)
-	 (progn (print "identifier")
-	 (cond ((is-l-paren (peek s 2)) #'self-call-state)
-	       ((is-equal (peek s 2)) #'set-local-state)
-	       (t (progn (push (next s) (state-exp s))
-			 #'expression-start)))))
-	((is-next-constant s)
-	 (progn (print "constant")
-	 (cond ((is-equal (peek s 2)) #'set-constant-state)
-	       (t (progn (push (next s) (state-exp s))
-			 #'expression-start)))))
-	((is-next-operator s)
-	 #'operator-state)
-	((is-next-def s)
-	 (progn (print "def")
-	 (if (is-identifier (peek s 2))
-	     #'def-state
-	     (progn (print "def error") nil))))
-	((is-next-class s)
-	 (progn (print "class")
-	 (if (is-constant (peek s 1))
-	     #'class-state
-	     (progn (print "class-error") nil))))
-	((is-next-if s)
-	 #'if-state)
-	((is-next-delimiter s)
-	 #'delim-state)
-	((is-next-l-paren s)
-	 (progn
-	   (push-cur-exp s)
-	   (skip s)
-	   #'expression-start))
-	(t (progn (print "missing state")
-		  (print (peek s 1))))))
+  (cond ((equal 'eof s) 'nil)
+	((equal (peek s 1) 'eof) 'nil)
+	((literal-state s))
+	((call-state s))
+	((operator-state s))
+	((set-symbol-state s))
+	((get-symbol-state s))
+	((def-state s))
+	((class-state s))
+	((if-state s))
+	(t (next s))))
 
-(defun operator-state (s)
-  ;state for operators.  Operator precedence will be handled at a later step
-  ;that is, a set of tokens like this:
-  ;2 + 3 * 5
-  ;will produce a parse tree like this:
-  ;(+ 2 (* 3 5))
-  ;and be cleaned up later
-  (let ((prev-exp (pop (state-exp s))))
-    ;(push-cur-exp s)
-    (push (next s) (state-exp s))
-    (push prev-exp (state-exp s))
-    #'expression-start))
+(defun literal-state (s)
+  (if (is-next-literal s)
+      (next s)
+      'nil))
 
 (defun call-state (s)
-  ;state for expression.method type calls.
-  (push-cur-exp s)
-  (push 'call (state-exp s))
-  (push (next s) (state-exp s))
-  (skip s)
-  (push (next s) (state-exp s))
-  #'arglist-start-state)
+  (if (and (is-next-identifier s) (is-l-paren (peek s 2)))
+      (list 'nil-receiver-call
+	    (next s) 
+	    (loop for exp = (expression-start s)
+	       until (is-r-paren exp)
+	       collecting exp))
+      (if (and (is-next-dot s) (is-identifier (peek s 2)))
+	  (let ((res '()))
+	    ;this type of call will be 'merged' with the previous expression in a 
+	    ;future pass
+	    (push 'prev-receiver-call res)
+	    (skip s)
+	    (push (next s) res)
+	    (if (is-next-l-paren s)
+		(progn (skip s)
+		       (loop for exp = (expression-start s)
+			  until (is-r-paren exp)
+			  do (push exp res))))
+	    (reverse res)))))
 
-(defun self-call-state (s)
-  ;state for method(args) type calls.  add a 'nil-reciever token to the start of the 
-  ;current expression, then continue to arglist
-  (push-cur-exp s)
-  (push 'call (state-exp s))
-  (push 'nil-reciever (state-exp s))
-  (push (next s) (state-exp s))
-  #'arglist-start-state)
-  
-(defun arglist-start-state (s)
-  ;state for argument lists
-  ;skip the open paren, then check for closing parens
-  (if (is-next-l-paren s)
-      (progn (skip s)
-	     (if (is-next-r-paren s)
-		 (progn
-		   (push 'nil-arguments (state-exp s))
-		   (pop-exp-stack s)
-		   #'expression-start)
-		 #'expression-start))
-      (print "arglist error, expected open paren")))
+(defun operator-state (s)
+  ;these will be merged with the previous expression as with method calls
+  (if (is-next-operator s)
+      (list (next s) (expression-start s))))
 
-(defun set-local-state (s)
-  ;insert a set token, then push just jump to a new expression
-  (push 'set-local (state-exp s))
-  (push (next s) (state-exp s))
-  #'expression-start)
+(defun get-symbol-state (s)
+  (if (and (is-next-symbol s) (not (or (is-equal (peek s 2))
+				       (is-l-paren (peek s 2)))))
+      (next s)))
 
-(defun set-constant-state (s)
-  ;as above
-  (push 'set-constant (state-exp s))
-  (push (next s) (state-exp s))
-  #'expression-start)
+(defun set-symbol-state (s)
+  (if (and (is-next-symbol s) (is-equal (peek s 2)))
+      (let ((symb (next s)))
+	(skip s)
+	(list 'set-symb symb (expression-start s)))))
 
 (defun def-state (s)
-  (push-cur-exp s)
-  (push (next s) (state-exp s))
-  (push (next s) (state-exp s))
-  (if (is-next-l-paren s)
-      (progn
-	(skip s)
-	(push-cur-exp s)
-	(push 'param-list (state-exp s))
-	#'param-list-state)
-     #'block-start))
+  (if (and (is-next-def s) (is-identifier (peek s 2)))
+      (let ((res (next s)))
+	(push (next s) res)
+	(if (is-next-l-paren s)
+	    (progn (skip s)
+		   (loop for token = (next s)
+		      until (is-r-paren token)
+		      do (if (is-identifier token)
+			     (push token res)))))
+	(skip s) ;ignoring the parse error when there isn't a block here
+	(push (block-start s) res)
+	(reverse res))))	
 
 (defun class-state (s)
-  (push-cur-exp s)
-  (push (next s) (state-exp s))
-  (push (next s) (state-exp s))
-  #'block-start)
-
-(defun param-list-state (s)
-  ;in the beginning or somewhere in the middle of a param list
-  ;check for the closing paren, then push the identifier
-  (if (is-next-comma s)
-      (skip s))
-1  (if (is-next-r-paren s)
-      (progn 
-	(pop-exp-stack s)
-	#'block-start)
-      (progn (push (next s) (state-exp s))
-	     #'param-list-state)))
+  (if (and (is-next-class s) (is-class (peek s 2)))
+      (let ((res (next s)))
+	(push (next s) res)
+	(push (block-start s) res)
+	(reverse res))))
 
 (defun block-start (s)
-  (if (is-next-indent s)
-      (progn (skip s)
-	     (push-cur-exp s)
-	     ;(push 'block (state-exp s))
-	     #'expression-start)
-      (print "block error, expected indent")))
+  (loop for exp = (expression-start s)
+     until (is-dedent exp)
+     collecting exp))
 
 (defun if-state (s)
-  ;this just drops the potential error from not having a block after the
-  ;if on the floor
-  (append-cur-exp s)
-  (push (next s) (state-exp s))
-  #'expression-start)
-
-(defun delim-state (s)
-  ;state for having found a delimiter.  This includes commas, start/end of blocks,
-  ;newlines, etc.
-  (cond ((is-next-indent s) #'block-start)
-	((is-next-comma s)
-	 (progn (skip s)
-		#'expression-start))
-	((is-next-r-paren s)
-	 (progn ;(pop-exp-stack s)
-		(skip s)
-		#'expression-start))
-	((is-next-dedent s)
-	 (progn (let ((offset (ceiling (cadr (next s)) 1)))
-		  (loop repeat offset
-		     do (pop-exp-stack s)))
-		(skip s)
-		#'expression-start))
-	((is-next-newline s)
-	 (progn (append-cur-exp s)
-		(skip s)
-		#'expression-start))))
+  (if (is-next-if s)
+      (let ((res (next s)))
+	(push (loop for exp = (expression-start s)
+		 until (is-indent exp)
+		 collecting exp)
+	      res)
+	(push (block-start s) res)
+	(reverse res))))
 
 ;is-next-x type functions only below
 (defun is-next-number (s)
@@ -372,6 +233,13 @@
 
 (defun is-constant (token)
   (equal (car token) 'constant))
+
+(defun is-symbol (token)
+  (or (is-constant token)
+      (is-identifier token)))
+
+(defun is-next-symbol (s)
+  (is-symbol (peek s 1)))
 
 (defun is-next-def (s)
   (is-def (peek s 1)))
