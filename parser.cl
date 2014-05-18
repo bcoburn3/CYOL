@@ -5,7 +5,6 @@
 (in-package :CYOL)
 
 (defstruct state
-  start
   pos 
   tokens
   exp
@@ -13,12 +12,16 @@
   len
   ops)
 
-(defun run-parser (tokens)
-  (let ((s (make-state :start 0 :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens))))
+
+;initial parsing code.  Generates a very sloppy tree, which will need pruning later.
+
+(defun to-tree (tokens)
+  (let ((s (make-state :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens))))
     (loop while (< (state-pos s) (- (state-len s) 1))
        for exp = (expression-start s)
-       while exp
        repeat 1000
+       until (equal exp 'eof)
+       do (print exp)
        collecting exp)))
 
 (defun next (s)
@@ -40,39 +43,8 @@
 	(let ((res (elt (state-tokens s) idx)))
 	  res))))
 
-(defun accept (s lst)
-  (let ((token (next s)))
-    (if (find (car token) lst)
-	token
-	nil)))
-
-(defun accept-run (s lst)
-  ;accepts one or more tokens of a type in lst
-  (loop for token = (next s)
-       while (find (car token) lst)
-       collecting token))
-
-(defun append-token (s token)
-  ;appends a token to the current expression
-  (setf (state-exp s) (append (state-exp s) (list token))))
-
-(defun push-cur-exp (s)
-  (if (state-exp s) ;don't push nil states
-      (push (list (state-exp s)) (state-exp-stack s)))
-  (setf (state-exp s) '()))
-
-(defun append-cur-exp (s)
-  (if (state-exp-stack s)
-      (if (state-exp s) ;don't push nil states
-	  (setf (car (state-exp-stack s)) (append (list (state-exp s)) (car (state-exp-stack s)))))
-       ;if the expression stack is empty we can just set it to the current expression
-      (setf (state-exp-stack s) (list (state-exp s))))
-  (setf (state-exp s) '()))
-
-(defun pop-exp-stack (s)
-  (setf (state-exp s) (append (list (state-exp s)) (pop (state-exp-stack s)))))
-
 (defun expression-start (s)
+  (print (peek s 1))
   (cond ((equal 'eof s) 'nil)
 	((equal (peek s 1) 'eof) 'nil)
 	((literal-state s))
@@ -92,9 +64,10 @@
 
 (defun call-state (s)
   (if (and (is-next-identifier s) (is-l-paren (peek s 2)))
-      (list 'nil-receiver-call
+      (list '(nil-receiver-call)
 	    (next s) 
 	    (loop for exp = (expression-start s)
+	       while exp
 	       until (is-r-paren exp)
 	       collecting exp))
       (if (and (is-next-dot s) (is-identifier (peek s 2)))
@@ -107,6 +80,7 @@
 	    (if (is-next-l-paren s)
 		(progn (skip s)
 		       (loop for exp = (expression-start s)
+			  while exp
 			  until (is-r-paren exp)
 			  do (push exp res))))
 	    (reverse res)))))
@@ -117,8 +91,9 @@
       (list (next s) (expression-start s))))
 
 (defun get-symbol-state (s)
-  (if (and (is-next-symbol s) (not (or (is-equal (peek s 2))
-				       (is-l-paren (peek s 2)))))
+  (if (and (is-next-symbol s) (and (not (is-equal (peek s 2)))
+				   (not (is-l-paren (peek s 2)))
+				   (not (is-dot (peek s 2)))))
       (next s)))
 
 (defun set-symbol-state (s)
@@ -142,26 +117,82 @@
 	(reverse res))))	
 
 (defun class-state (s)
-  (if (and (is-next-class s) (is-class (peek s 2)))
-      (let ((res (next s)))
+  (if (and (is-next-class s) (is-constant (peek s 2)))
+      (let ((res (list (next s))))
 	(push (next s) res)
 	(push (block-start s) res)
 	(reverse res))))
 
 (defun block-start (s)
   (loop for exp = (expression-start s)
+     while exp
      until (is-dedent exp)
      collecting exp))
 
 (defun if-state (s)
   (if (is-next-if s)
-      (let ((res (next s)))
+      (let ((res (list (next s))))
 	(push (loop for exp = (expression-start s)
+		 while exp
 		 until (is-indent exp)
 		 collecting exp)
 	      res)
 	(push (block-start s) res)
 	(reverse res))))
+
+;Pruning code.  Removes tokens that are difficult to keep out of the initial tree and
+;cleans up call expressions.
+
+(defun prune (tree)
+  (if (atom tree)
+      tree
+      (let ((pruned-tree (loop for token in tree
+			      collecting (prune token))))
+	(loop with i = 0
+	   with res = '()
+	   until (>= i (length tree))
+	   for cur-token = (nth i pruned-tree)
+	   for next-token = (nth (incf i) tree) ;incf instead of + 1 intentionally
+	   do (if (listp cur-token)
+		  (if (not (rem-token? cur-token))
+		      ;(if (listp next-token)
+			  (if (or (equal (car-or-nil next-token) 'prev-receiver-call)
+				  (equal (caar-or-nil next-token) 'operator))
+			      (progn (incf i)
+				     ;(print "test")
+				     (push (append (list (car next-token)) (list cur-token) (cdr next-token)) res))
+			      (push cur-token res))
+			  ;(push cur-token res))
+		      )
+		  (push cur-token res))
+	     ;(print "loop test")
+	     ;(print cur-token)
+	     ;(print (caar-or-nil cur-token))
+	     ;(print next-token)
+	     ;(print (caar-or-nil next-token))
+	     ;(print (equal (car-or-nil next-token) 'prev-receiver-call))
+	     ;(print (equal (car-or-nil next-token) 'operator))
+	   finally (return (reverse res))))))
+
+(defun car-or-nil (lst)
+  (if (listp lst)
+      (car lst)))
+
+(defun caar-or-nil (lst)
+  (if (listp lst)
+      (if (listp (car lst))
+	  (caar lst))))
+
+(defun cdr-or-nil (lst)
+  (if (listp lst)
+      (cdr lst)))
+
+(defun rem-token? (token)
+  (if (or (find token (list '(NEWLINE "\\n") '(VALUE #\() '(VALUE #\))) :test #'equal)
+	  (equal (car token) 'indent)
+	  (equal (car token) 'dedent))
+      t
+      nil))
 
 ;is-next-x type functions only below
 (defun is-next-number (s)
@@ -192,7 +223,7 @@
 
 (defun is-dot (token)
   (and (equal (car token) 'value)
-       (equal (cadr token) ".")))
+       (equal (cadr token) #\.)))
 
 (defun is-next-identifier (s)
   (is-identifier (peek s 1)))
