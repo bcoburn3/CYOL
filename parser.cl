@@ -19,9 +19,7 @@
   (let ((s (make-state :pos -1 :tokens tokens :exp '() :exp-stack '() :len (length tokens))))
     (loop while (< (state-pos s) (- (state-len s) 1))
        for exp = (expression-start s)
-       repeat 1000
        until (equal exp 'eof)
-       do (print exp)
        collecting exp)))
 
 (defun next (s)
@@ -44,7 +42,6 @@
 	  res))))
 
 (defun expression-start (s)
-  (print (peek s 1))
   (cond ((equal 'eof s) 'nil)
 	((equal (peek s 1) 'eof) 'nil)
 	((literal-state s))
@@ -74,7 +71,7 @@
 	  (let ((res '()))
 	    ;this type of call will be 'merged' with the previous expression in a 
 	    ;future pass
-	    (push 'prev-receiver-call res)
+	    (push '(prev-receiver-call) res)
 	    (skip s)
 	    (push (next s) res)
 	    (if (is-next-l-paren s)
@@ -100,7 +97,7 @@
   (if (and (is-next-symbol s) (is-equal (peek s 2)))
       (let ((symb (next s)))
 	(skip s)
-	(list 'set-symb symb (expression-start s)))))
+	(list '(set-symb) symb (expression-start s)))))
 
 (defun def-state (s)
   (if (and (is-next-def s) (is-identifier (peek s 2)))
@@ -155,23 +152,13 @@
 	   for next-token = (nth (incf i) tree) ;incf instead of + 1 intentionally
 	   do (if (listp cur-token)
 		  (if (not (rem-token? cur-token))
-		      ;(if (listp next-token)
-			  (if (or (equal (car-or-nil next-token) 'prev-receiver-call)
-				  (equal (caar-or-nil next-token) 'operator))
-			      (progn (incf i)
-				     ;(print "test")
-				     (push (append (list (car next-token)) (list cur-token) (cdr next-token)) res))
-			      (push cur-token res))
-			  ;(push cur-token res))
-		      )
+		      (if (or (equal (caar-or-nil next-token) 'prev-receiver-call)
+			      (equal (caar-or-nil next-token) 'operator))
+			  (progn (incf i)
+				 (push (append (list (car next-token)) (list cur-token) (cdr next-token)) res))
+			  (push cur-token res))
+		      ) ;don't push to-be-removed tokens
 		  (push cur-token res))
-	     ;(print "loop test")
-	     ;(print cur-token)
-	     ;(print (caar-or-nil cur-token))
-	     ;(print next-token)
-	     ;(print (caar-or-nil next-token))
-	     ;(print (equal (car-or-nil next-token) 'prev-receiver-call))
-	     ;(print (equal (car-or-nil next-token) 'operator))
 	   finally (return (reverse res))))))
 
 (defun car-or-nil (lst)
